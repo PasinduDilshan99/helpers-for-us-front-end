@@ -1,11 +1,11 @@
 // DEV
-const PROTOCOL = "http";
-const DOMAIN = "localhost";
-const PORT = "8090";
-const CONTEXT_ROOT = "helpers-for-us";
-const VERSION = "/v0";
-const API = "/api";
-export const BASE_PATH = `${PROTOCOL}://${DOMAIN}:${PORT}/${CONTEXT_ROOT}`;
+// const PROTOCOL = "http";
+// const DOMAIN = "localhost";
+// const PORT = "8090";
+// const CONTEXT_ROOT = "helpers-for-us";
+// const VERSION = "/v0";
+// const API = "/api";
+// export const BASE_PATH = `${PROTOCOL}://${DOMAIN}:${PORT}/${CONTEXT_ROOT}`;
 
 // Staging
 // const PROTOCOL = "https";
@@ -18,13 +18,13 @@ export const BASE_PATH = `${PROTOCOL}://${DOMAIN}:${PORT}/${CONTEXT_ROOT}`;
 // export const BASE_PATH = `${PROTOCOL}://${DOMAIN}/${CONTEXT_ROOT}`;
 
 // Production
-// const PROTOCOL = "https";
-// const DOMAIN = "api.felicitatrips.com"; // production backend domain
-// const PORT = "443"; // if using HTTPS (omit port in URL)
-// const CONTEXT_ROOT = "felicita";
-// const VERSION = "/v0";
-// const API = "/api";
-// export const BASE_PATH = `${PROTOCOL}://${DOMAIN}/${CONTEXT_ROOT}`;
+const PROTOCOL = "https";
+const DOMAIN = "helpersforusapi.felicitatrips.com"; // production backend domain
+const PORT = "443"; // if using HTTPS (omit port in URL)
+const CONTEXT_ROOT = "helpers-for-us";
+const VERSION = "/v0";
+const API = "/api";
+export const BASE_PATH = `${PROTOCOL}://${DOMAIN}/${CONTEXT_ROOT}`;
 
 // http://159.198.43.146:8080/felicita
 
