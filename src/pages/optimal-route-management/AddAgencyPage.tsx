@@ -1,12 +1,15 @@
 "use client";
 
-import React, { useState } from "react";
+import React, { useState, useEffect, useMemo, useRef } from "react";
 import { useTheme } from "@/contexts/ThemeContext";
 import { hexToRgba } from "@/utils/functions";
 import PageHeader from "@/components/common-components/static-components/PageHeader";
 import { ToastNotification } from "@/components/common-components/ToastNotification";
 import { LocationService } from "@/services/locationService";
-import { AddAgencyRequest } from "@/types/location-types";
+import {
+  AddAgencyRequest,
+  Agency,
+} from "@/types/location-types";
 import { ADD_AGENCY_BREADCRUMB_DATA } from "@/data/breadcrumb-data";
 import {
   Building2,
@@ -20,6 +23,8 @@ import {
   FileText,
   Navigation,
   CheckCircle2,
+  AlertTriangle,
+  Search,
 } from "lucide-react";
 
 /* ─────────────────────────────────────────────
@@ -49,7 +54,6 @@ const EMPTY_FORM: FormState = {
 
 type FormErrors = Partial<Record<keyof FormState, string>>;
 
-/** Only these fields are mandatory — everything else is optional */
 const REQUIRED_FIELDS: (keyof FormState)[] = [
   "name",
   "latitude",
@@ -63,8 +67,6 @@ const AddAgencyPage = () => {
   const [errors, setErrors] = useState<FormErrors>({});
   const [submitting, setSubmitting] = useState(false);
   const [locating, setLocating] = useState(false);
-
-  // Success state — show created ID
   const [createdId, setCreatedId] = useState<number | null>(null);
 
   const [toast, setToast] = useState<{
@@ -72,6 +74,12 @@ const AddAgencyPage = () => {
     title: string;
     message: string;
   } | null>(null);
+
+  /* ── NEW: existing agencies + dropdown state ── */
+  const [existingAgencies, setExistingAgencies] = useState<Agency[]>([]);
+  const [loadingAgencies, setLoadingAgencies] = useState(false);
+  const [showDropdown, setShowDropdown] = useState(false);
+  const nameFieldRef = useRef<HTMLDivElement | null>(null);
 
   /* ── Styles ── */
   const surface = theme.surface;
@@ -81,21 +89,73 @@ const AddAgencyPage = () => {
   const primary = theme.primary;
   const accent = theme.accent;
 
+  /* ── NEW: fetch existing agencies on mount ── */
+  useEffect(() => {
+    let cancelled = false;
+    (async () => {
+      setLoadingAgencies(true);
+      try {
+        const res = await LocationService.getAllAgencies();
+        if (!cancelled) setExistingAgencies(res.data ?? []);
+      } catch (err) {
+        // silent — duplicates check is best-effort
+        console.error("Failed to load existing agencies", err);
+      } finally {
+        if (!cancelled) setLoadingAgencies(false);
+      }
+    })();
+    return () => {
+      cancelled = true;
+    };
+  }, []);
+
+  /* ── NEW: computed matches + duplicate flag ── */
+  const trimmedName = form.name.trim().toLowerCase();
+
+  const nameMatches = useMemo(() => {
+    if (!trimmedName) return [];
+    return existingAgencies.filter((a) =>
+      a.name.toLowerCase().includes(trimmedName),
+    );
+  }, [existingAgencies, trimmedName]);
+
+  // Exact duplicate (name only, case-insensitive)
+  const isDuplicate = useMemo(
+    () =>
+      !!trimmedName &&
+      existingAgencies.some((a) => a.name.toLowerCase() === trimmedName),
+    [existingAgencies, trimmedName],
+  );
+
+  /* ── Close dropdown on outside click ── */
+  useEffect(() => {
+    const handler = (e: MouseEvent) => {
+      if (
+        nameFieldRef.current &&
+        !nameFieldRef.current.contains(e.target as Node)
+      ) {
+        setShowDropdown(false);
+      }
+    };
+    document.addEventListener("mousedown", handler);
+    return () => document.removeEventListener("mousedown", handler);
+  }, []);
+
   /* ── Handlers ── */
   const handleChange =
     (field: keyof FormState) =>
-    (
-      e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>,
-    ) => {
+    (e: React.ChangeEvent<HTMLInputElement | HTMLTextAreaElement>) => {
       setForm((prev) => ({ ...prev, [field]: e.target.value }));
       if (errors[field]) {
         setErrors((prev) => ({ ...prev, [field]: undefined }));
       }
+      if (field === "name") setShowDropdown(true);
     };
 
   const handleReset = () => {
     setForm(EMPTY_FORM);
     setErrors({});
+    setShowDropdown(false);
   };
 
   const handleUseCurrentLocation = () => {
@@ -107,7 +167,6 @@ const AddAgencyPage = () => {
       });
       return;
     }
-
     setLocating(true);
     navigator.geolocation.getCurrentPosition(
       (pos) => {
@@ -125,7 +184,8 @@ const AddAgencyPage = () => {
         setToast({
           type: "success",
           title: "Location Found",
-          message: "Coordinates have been filled in from your current location.",
+          message:
+            "Coordinates have been filled in from your current location.",
         });
       },
       () => {
@@ -133,19 +193,20 @@ const AddAgencyPage = () => {
         setToast({
           type: "error",
           title: "Location Failed",
-          message: "Could not get your location. Please enter coordinates manually.",
+          message:
+            "Could not get your location. Please enter coordinates manually.",
         });
       },
       { enableHighAccuracy: true, timeout: 10000 },
     );
   };
 
-  /* ── Validation — only name, latitude, longitude are required ── */
   const validate = (): FormErrors => {
     const errs: FormErrors = {};
-
-    // Required fields
     if (!form.name.trim()) errs.name = "Agency name is required.";
+
+    // NEW: block duplicate on submit too
+    if (isDuplicate) errs.name = "An agency with this name already exists.";
 
     if (!form.latitude.trim()) {
       errs.latitude = "Latitude is required.";
@@ -165,7 +226,6 @@ const AddAgencyPage = () => {
       }
     }
 
-    // Optional field — only validate format IF user entered something
     if (form.webSite.trim()) {
       try {
         new URL(form.webSite.trim());
@@ -204,8 +264,6 @@ const AddAgencyPage = () => {
     setErrors({});
     setSubmitting(true);
 
-    // Send empty strings for optional fields that were left blank,
-    // so the payload matches AddAgencyRequest (all `string`).
     const payload: AddAgencyRequest = {
       name: form.name.trim(),
       description: form.description.trim(),
@@ -219,9 +277,7 @@ const AddAgencyPage = () => {
 
     try {
       const response = await LocationService.addAgency(payload);
-
       setCreatedId(response.data?.id ?? null);
-
       setToast({
         type: "success",
         title: "Agency Added!",
@@ -237,7 +293,7 @@ const AddAgencyPage = () => {
     }
   };
 
-  /* ── Field renderer ── */
+  /* ── Field renderer (unchanged) ── */
   const renderInput = (
     field: keyof FormState,
     label: string,
@@ -350,7 +406,7 @@ const AddAgencyPage = () => {
     );
   };
 
-  /* ── Success view ── */
+  /* ── Success view (unchanged) ── */
   if (createdId !== null) {
     return (
       <div
@@ -368,10 +424,7 @@ const AddAgencyPage = () => {
 
         <div
           className="sticky top-0 z-10 backdrop-blur-sm border-b transition-colors duration-300"
-          style={{
-            backgroundColor: `${surface}CC`,
-            borderColor: border,
-          }}
+          style={{ backgroundColor: `${surface}CC`, borderColor: border }}
         >
           <div className="mx-auto px-4 sm:px-6 lg:px-8 py-4">
             <PageHeader
@@ -385,10 +438,7 @@ const AddAgencyPage = () => {
         <div className="mx-auto px-4 sm:px-6 lg:px-8 py-10 max-w-2xl">
           <div
             className="rounded-2xl shadow-lg p-8 text-center"
-            style={{
-              backgroundColor: surface,
-              border: `1px solid ${border}`,
-            }}
+            style={{ backgroundColor: surface, border: `1px solid ${border}` }}
           >
             <div
               className="w-16 h-16 rounded-full flex items-center justify-center mx-auto mb-4"
@@ -455,13 +505,9 @@ const AddAgencyPage = () => {
         />
       )}
 
-      {/* Header */}
       <div
         className="sticky top-0 z-10 backdrop-blur-sm border-b transition-colors duration-300"
-        style={{
-          backgroundColor: `${surface}CC`,
-          borderColor: border,
-        }}
+        style={{ backgroundColor: `${surface}CC`, borderColor: border }}
       >
         <div className="mx-auto px-4 sm:px-6 lg:px-8 py-4">
           <PageHeader
@@ -476,10 +522,7 @@ const AddAgencyPage = () => {
         <form onSubmit={handleSubmit}>
           <div
             className="rounded-2xl shadow-lg p-6 sm:p-8 transition-colors duration-300"
-            style={{
-              backgroundColor: surface,
-              border: `1px solid ${border}`,
-            }}
+            style={{ backgroundColor: surface, border: `1px solid ${border}` }}
           >
             <h2
               className="text-lg font-bold mb-1 flex items-center gap-2"
@@ -489,17 +532,144 @@ const AddAgencyPage = () => {
               Agency Details
             </h2>
             <p className="text-xs mb-6" style={{ color: textSecondary }}>
-              Fields marked with{" "}
-              <span style={{ color: theme.error }}>*</span> are required.
-              Coordinates are used for route optimization.
+              Fields marked with <span style={{ color: theme.error }}>*</span>{" "}
+              are required. Coordinates are used for route optimization.
             </p>
 
             <div className="grid grid-cols-1 md:grid-cols-2 gap-5">
-              {renderInput("name", "Agency Name", {
-                icon: <Building2 className="w-3.5 h-3.5" />,
-                placeholder: "e.g. WTC Colombo",
-                fullWidth: true,
-              })}
+              {/* ── NAME FIELD with dropdown (custom render, replaces renderInput) ── */}
+              <div
+                id="field-name"
+                className="md:col-span-2"
+                ref={nameFieldRef}
+                style={{ position: "relative" }}
+              >
+                <label
+                  className="block text-xs font-semibold mb-1.5 flex items-center gap-1.5"
+                  style={{ color: textSecondary }}
+                >
+                  <Building2 className="w-3.5 h-3.5" />
+                  Agency Name
+                  <span style={{ color: theme.error }}>*</span>
+                </label>
+
+                <div style={{ position: "relative" }}>
+                  <input
+                    type="text"
+                    value={form.name}
+                    onChange={handleChange("name")}
+                    onFocus={() => setShowDropdown(true)}
+                    placeholder="e.g. WTC Colombo"
+                    className="w-full px-3 py-2.5 rounded-xl text-sm outline-none transition-all duration-200"
+                    style={{
+                      backgroundColor: theme.background,
+                      border: `1px solid ${
+                        errors.name || isDuplicate ? theme.error : border
+                      }`,
+                      color: text,
+                    }}
+                  />
+                  {loadingAgencies && (
+                    <Loader2
+                      className="w-4 h-4 animate-spin"
+                      style={{
+                        position: "absolute",
+                        right: 12,
+                        top: "50%",
+                        transform: "translateY(-50%)",
+                        color: textSecondary,
+                      }}
+                    />
+                  )}
+                </div>
+
+                {/* Dropdown */}
+                {showDropdown && trimmedName && nameMatches.length > 0 && (
+                  <div
+                    className="absolute z-20 mt-1 w-full rounded-xl shadow-lg overflow-hidden"
+                    style={{
+                      backgroundColor: surface,
+                      border: `1px solid ${border}`,
+                      maxHeight: 220,
+                      overflowY: "auto",
+                    }}
+                  >
+                    <div
+                      className="px-3 py-2 text-[11px] font-semibold flex items-center gap-1"
+                      style={{
+                        color: textSecondary,
+                        borderBottom: `1px solid ${border}`,
+                      }}
+                    >
+                      <Search className="w-3 h-3" />
+                      Existing agencies matching "{form.name}"
+                    </div>
+                    {nameMatches.slice(0, 8).map((agency) => {
+                      const exact =
+                        agency.name.toLowerCase() === trimmedName;
+                      return (
+                        <button
+                          key={agency.agencyId}
+                          type="button"
+                          onClick={() => {
+                            setForm((prev) => ({
+                              ...prev,
+                              name: agency.name,
+                              city: agency.city || prev.city,
+                              webSite: agency.webSiteUrl || prev.webSite,
+                              latitude: String(agency.latitude),
+                              longitude: String(agency.longitude),
+                            }));
+                            setShowDropdown(false);
+                          }}
+                          className="w-full text-left px-3 py-2 flex items-center justify-between gap-2 hover:bg-black/5 transition-colors"
+                        >
+                          <div className="min-w-0">
+                            <p
+                              className="text-sm font-medium truncate"
+                              style={{ color: text }}
+                            >
+                              {agency.name}
+                            </p>
+                            <p
+                              className="text-[11px] truncate"
+                              style={{ color: textSecondary }}
+                            >
+                              {agency.city || "—"} · #{agency.agencyId}
+                            </p>
+                          </div>
+                          {exact && (
+                            <span
+                              className="text-[10px] font-semibold px-1.5 py-0.5 rounded flex items-center gap-1 flex-shrink-0"
+                              style={{
+                                backgroundColor: hexToRgba(theme.error, 0.12),
+                                color: theme.error,
+                              }}
+                            >
+                              <AlertTriangle className="w-3 h-3" />
+                              Already exists
+                            </span>
+                          )}
+                        </button>
+                      );
+                    })}
+                  </div>
+                )}
+
+                {errors.name ? (
+                  <p className="text-xs mt-1" style={{ color: theme.error }}>
+                    {errors.name}
+                  </p>
+                ) : isDuplicate ? (
+                  <p
+                    className="text-xs mt-1 flex items-center gap-1"
+                    style={{ color: theme.error }}
+                  >
+                    <AlertTriangle className="w-3 h-3" />
+                    An agency with this name already exists.
+                  </p>
+                ) : null}
+              </div>
 
               {renderInput("description", "Description", {
                 icon: <FileText className="w-3.5 h-3.5" />,
@@ -533,7 +703,7 @@ const AddAgencyPage = () => {
               })}
             </div>
 
-            {/* Coordinates section */}
+            {/* Coordinates section (unchanged) */}
             <div
               className="mt-8 pt-6"
               style={{ borderTop: `1px solid ${border}` }}
@@ -543,10 +713,7 @@ const AddAgencyPage = () => {
                   className="text-sm font-bold flex items-center gap-2"
                   style={{ color: text }}
                 >
-                  <Navigation
-                    className="w-4 h-4"
-                    style={{ color: accent }}
-                  />
+                  <Navigation className="w-4 h-4" style={{ color: accent }} />
                   Location Coordinates{" "}
                   <span style={{ color: theme.error }}>*</span>
                 </h3>
@@ -559,18 +726,6 @@ const AddAgencyPage = () => {
                     backgroundColor: hexToRgba(accent, 0.12),
                     color: accent,
                   }}
-                  onMouseEnter={(e) =>
-                    (e.currentTarget.style.backgroundColor = hexToRgba(
-                      accent,
-                      0.2,
-                    ))
-                  }
-                  onMouseLeave={(e) =>
-                    (e.currentTarget.style.backgroundColor = hexToRgba(
-                      accent,
-                      0.12,
-                    ))
-                  }
                 >
                   {locating ? (
                     <>
@@ -596,7 +751,6 @@ const AddAgencyPage = () => {
                   max: 90,
                   hint: "Between -90 and 90",
                 })}
-
                 {renderInput("longitude", "Longitude", {
                   icon: <MapPin className="w-3.5 h-3.5" />,
                   placeholder: "e.g. 79.8612",
@@ -608,7 +762,6 @@ const AddAgencyPage = () => {
                 })}
               </div>
 
-              {/* Live preview of coordinates */}
               {form.latitude && form.longitude && (
                 <div
                   className="mt-4 p-3 rounded-xl flex items-center gap-2"
@@ -621,10 +774,7 @@ const AddAgencyPage = () => {
                     className="w-4 h-4 flex-shrink-0"
                     style={{ color: primary }}
                   />
-                  <span
-                    className="text-xs"
-                    style={{ color: textSecondary }}
-                  >
+                  <span className="text-xs" style={{ color: textSecondary }}>
                     Preview:{" "}
                     <span
                       className="font-mono font-semibold"
@@ -647,7 +797,7 @@ const AddAgencyPage = () => {
               )}
             </div>
 
-            {/* Action buttons */}
+            {/* Action buttons — Add is disabled when duplicate */}
             <div className="mt-8 flex flex-col sm:flex-row gap-3">
               <button
                 type="button"
@@ -659,16 +809,6 @@ const AddAgencyPage = () => {
                   borderColor: border,
                   color: textSecondary,
                 }}
-                onMouseEnter={(e) => {
-                  if (!submitting) {
-                    e.currentTarget.style.borderColor = primary;
-                    e.currentTarget.style.color = primary;
-                  }
-                }}
-                onMouseLeave={(e) => {
-                  e.currentTarget.style.borderColor = border;
-                  e.currentTarget.style.color = textSecondary;
-                }}
               >
                 <RotateCcw className="w-4 h-4" />
                 Reset
@@ -676,16 +816,28 @@ const AddAgencyPage = () => {
 
               <button
                 type="submit"
-                disabled={submitting}
+                disabled={submitting || isDuplicate}
+                title={
+                  isDuplicate
+                    ? "This agency name already exists"
+                    : undefined
+                }
                 className="cursor-pointer flex-1 px-6 py-3.5 rounded-xl text-white font-medium flex items-center justify-center gap-2 shadow-lg hover:shadow-xl transition-all duration-200 disabled:opacity-50 disabled:cursor-not-allowed"
                 style={{
-                  background: `linear-gradient(135deg, ${primary}, ${accent})`,
+                  background: isDuplicate
+                    ? `linear-gradient(135deg, ${textSecondary}, ${textSecondary})`
+                    : `linear-gradient(135deg, ${primary}, ${accent})`,
                 }}
               >
                 {submitting ? (
                   <>
                     <Loader2 className="w-4 h-4 animate-spin" />
                     Adding Agency...
+                  </>
+                ) : isDuplicate ? (
+                  <>
+                    <AlertTriangle className="w-4 h-4" />
+                    Agency Already Exists
                   </>
                 ) : (
                   <>
